@@ -571,6 +571,7 @@ const lavaPhysics = {
   poolFloor: 0.012, // the pool never drains below this area
   emitEvery: [6, 14],  // s between emissions (stretched by 1/√Flow speed), given enough wax
   emitFrac:  0.5,   // share of the pool's excess that leaves in one emission
+  tEmerge:   1.5,   // s for a newly emitted droplet to grow from minRadius to its target area
 };
 
 let regionCount = 0;
@@ -1743,22 +1744,30 @@ function stepLavaSim(dt, now) {
   const removeBody = (b) => { const i = bodies.indexOf(b); if (i >= 0) bodies.splice(i, 1); };
   const removePair = (pr) => { const i = pairs.indexOf(pr); if (i >= 0) pairs.splice(i, 1); };
 
-  // Bridge snaps: a satellite is left in the middle of the gap.
+  // Bridge snaps: a satellite is left in the middle of the gap — already
+  // grown in over the back half of 'stretch' (F) if there was room for one,
+  // otherwise (satellite too small, or the pair never lingered past tau=0.5
+  // before rupturing) spawned fully formed here as a fallback.
   const rupture = (pr) => {
     const { a, b } = pr;
-    const g = geom(a, b);
-    const total = a.area + b.area;
-    const satArea = total * lerp(P.satFrac[0], P.satFrac[1], lavaHash(now * 5.7 + a.id));
-    const shareA = satArea * a.area / total, shareB = satArea - shareA;
-    if (satArea >= minArea && a.area - shareA >= minArea && b.area - shareB >= minArea) {
-      const gap = Math.max(g.dist - g.ra - g.rb, 0);
-      const sx = a.isPool ? b.x : a.x + g.nx * g.ra;    // a's surface point
-      const sy = a.isPool ? poolSurfaceAt(b.x) : a.y + g.ny * g.ra;
-      const sat = newBody({
-        x: sx + g.nx * gap / 2, y: sy + g.ny * gap / 2, area: satArea,
-        T: (a.T + b.T) / 2, aspect: 1.4, axX: g.nx, axY: g.ny, noPairUntil: now + 1.5,
-      });
-      if (sat) { a.area -= shareA; b.area -= shareB; }
+    if (pr.sat) {
+      removePair(pr.satPairA); removePair(pr.satPairB);
+      pr.sat.noPairUntil = now + 1.0;
+    } else {
+      const g = geom(a, b);
+      const total = a.area + b.area;
+      const satArea = total * lerp(P.satFrac[0], P.satFrac[1], lavaHash(now * 5.7 + a.id));
+      const shareA = satArea * a.area / total, shareB = satArea - shareA;
+      if (satArea >= minArea && a.area - shareA >= minArea && b.area - shareB >= minArea) {
+        const gap = Math.max(g.dist - g.ra - g.rb, 0);
+        const sx = a.isPool ? b.x : a.x + g.nx * g.ra;    // a's surface point
+        const sy = a.isPool ? poolSurfaceAt(b.x) : a.y + g.ny * g.ra;
+        const sat = newBody({
+          x: sx + g.nx * gap / 2, y: sy + g.ny * gap / 2, area: satArea,
+          T: (a.T + b.T) / 2, aspect: 1.4, axX: g.nx, axY: g.ny, noPairUntil: now + 1.5,
+        });
+        if (sat) { a.area -= shareA; b.area -= shareB; }
+      }
     }
     a.noPairUntil = b.noPairUntil = now + 1.0;
     removePair(pr);
@@ -1855,7 +1864,11 @@ function stepLavaSim(dt, now) {
   }
 
   // ── 2. Pairs: contact → drain → neck → merge, or neck → stretch → snap ──
-  outer: for (let i = 0; i < bodies.length; i++) {
+  // State changes that remove/replace bodies (converge finish, absorb finish,
+  // rupture) are queued here and applied after the double loop, so every
+  // other pair still updates this frame instead of a one-frame hitch.
+  const events = [];
+  for (let i = 0; i < bodies.length; i++) {
     for (let j = i + 1; j < bodies.length; j++) {
       const a = bodies[i], b = bodies[j];
       const g = geom(a, b);
@@ -1896,7 +1909,7 @@ function stepLavaSim(dt, now) {
       } else if (pr.state === 'neck') {
         pr.t += dt;
         const tN = P.tNeckK * rEff;
-        const grown = Math.min(pr.t / tN, 1) ** 0.6;
+        const grown = sstep(pr.t / tN, 0, 1);   // zero slope at both ends
         pr.k = P.kMax * rEff * grown;
         // capillary pull (Stokes: speed ∝ force / R)
         // Applied as a displacement (a velocity × dt), not added to b.vx/b.vy:
@@ -1935,8 +1948,7 @@ function stepLavaSim(dt, now) {
         // identical SDFs is dilated by k/4, so k must be 0 at the swap
         pr.k = pr.k0 * (1 - sstep(tau, 0.7, 1));
         if (tau >= 1) {
-          finishConverge(pr);
-          break outer;   // bodies changed; the rest waits a frame
+          events.push({ type: 'converge', pr });
         }
       } else if (pr.state === 'absorb') {
         const body = a.isPool ? b : a;
@@ -1950,30 +1962,98 @@ function stepLavaSim(dt, now) {
         body.y += (poolSurfaceAt(body.x) - rc - body.y) * (1 - Math.exp(-dt / P.tAbsFollow));
         pr.k = P.kMax * rc;
         if (body.area < minArea) {                  // fully inside the pool's SDF by now
-          pool.area += body.area;
-          removeBody(body);
-          removePair(pr);
-          break outer;
+          events.push({ type: 'absorbDone', pr });
+        }
+      } else if (pr.state === 'emerge') {
+        // grows from minArea to its target, drawing the difference straight
+        // out of the pool, while its own buoyancy (it's hot) lifts it clear;
+        // once it's pulled far enough away it hands off to the normal
+        // stretch → rupture pinch-off, same as any other neck would
+        const body = a.isPool ? b : a;
+        pr.t += dt;
+        const tau = Math.min(pr.t / P.tEmerge, 1);
+        const newArea = lerp(minArea, pr.targetArea, sstep(tau, 0, 1));
+        const dA = newArea - body.area;
+        if (dA > 0) { body.area = newArea; pool.area -= dA; }
+        pr.k = P.kMax * R(body);
+        if (g.dist > (g.ra + g.rb) * P.stretchBreak) {
+          pr.state = 'stretch'; pr.t = 0; pr.k0 = pr.k; pr.d0 = g.dist;
         }
       } else if (pr.state === 'stretch') {
         const tP = P.tPinch * Math.sqrt(rEff / P.rRef) * (pr.fast ? 0.35 : 1);
         pr.t += dt;
         const tau = Math.min(pr.t / tP, 1);
-        pr.k = pr.k0 * Math.sqrt(1 - tau);
+        pr.k = pr.k0 * (1 - sstep(tau, 0, 1));      // zero slope both ends: thins, doesn't snap
         const pull = P.pull * 0.3 * (1 - tau);      // a thinning bridge still tugs a little
         if (!a.isPool) { a.x += g.nx * pull * rEff / g.ra * dt; a.y += g.ny * pull * rEff / g.ra * dt; }
         if (!b.isPool) { b.x -= g.nx * pull * rEff / g.rb * dt; b.y -= g.ny * pull * rEff / g.rb * dt; }
+        // F: bead a satellite into existence at the gap midpoint partway
+        // through the thinning (fed by two little bridges that mirror the
+        // parent bridge's k), instead of it popping in fully formed at rupture
+        if (!pr.sat && tau >= 0.5) {
+          const total = a.area + b.area;
+          const satArea = total * lerp(P.satFrac[0], P.satFrac[1], lavaHash(now * 5.7 + a.id));
+          const shareA = satArea * a.area / total, shareB = satArea - shareA;
+          if (satArea >= minArea && a.area - shareA >= minArea && b.area - shareB >= minArea) {
+            const gap = Math.max(g.dist - g.ra - g.rb, 0);
+            const sx = a.isPool ? b.x : a.x + g.nx * g.ra;
+            const sy = a.isPool ? poolSurfaceAt(b.x) : a.y + g.ny * g.ra;
+            const sat = newBody({
+              x: sx + g.nx * gap / 2, y: sy + g.ny * gap / 2, area: minArea,
+              T: (a.T + b.T) / 2, aspect: 1.4, axX: g.nx, axY: g.ny, noPairUntil: Infinity,
+            });
+            if (sat) {
+              pr.sat = sat; pr.satTarget = satArea;
+              pr.satShareA = shareA / satArea; pr.satShareB = shareB / satArea;
+              pr.satPairA = { a, b: sat, state: 'satBridge', k: pr.k * 0.5 };
+              pr.satPairB = { a: sat, b, state: 'satBridge', k: pr.k * 0.5 };
+              pairs.push(pr.satPairA, pr.satPairB);
+            }
+          }
+        }
+        if (pr.sat) {
+          const e = sstep(tau, 0.5, 1);
+          const newSatArea = lerp(minArea, pr.satTarget, e);
+          const dA = newSatArea - pr.sat.area;
+          if (dA > 0) {
+            pr.sat.area = newSatArea;
+            a.area -= dA * pr.satShareA; b.area -= dA * pr.satShareB;
+          }
+          pr.satPairA.k = pr.satPairB.k = pr.k * 0.5;
+        }
         if (tau >= 1) {
-          rupture(pr);
-          break outer;
+          events.push({ type: 'rupture', pr });
         } else if (g.dist < pr.d0 * 0.9) {
           // actually coming back together (not just still close — the two
           // halves of a cut, or a blob leaving the pool, start overlapping):
           // the bridge regrows from where it is
           pr.state = 'neck';
-          pr.t = P.tNeckK * rEff * Math.pow(pr.k / (P.kMax * rEff), 1 / 0.6);
+          // inverse of grown = smoothstep(t/tN): closed form for 3x²-2x³ = grown
+          const grown = clamp(pr.k / (P.kMax * rEff), 0, 1);
+          pr.t = (P.tNeckK * rEff) * (0.5 - Math.sin(Math.asin(clamp(1 - 2 * grown, -1, 1)) / 3));
+          if (pr.sat) {
+            // the parents are re-merging instead of separating: leave the
+            // partial satellite as its own small free body, stop tracking it
+            removePair(pr.satPairA); removePair(pr.satPairB);
+            pr.sat.noPairUntil = now + 0.5;
+            pr.sat = pr.satPairA = pr.satPairB = null;
+          }
         }
       }
+    }
+  }
+
+  // Apply queued state changes now that every pair has updated this frame.
+  for (const ev of events) {
+    if (ev.type === 'converge') {
+      finishConverge(ev.pr);
+    } else if (ev.type === 'absorbDone') {
+      const body = ev.pr.a.isPool ? ev.pr.b : ev.pr.a;
+      pool.area += body.area;
+      removeBody(body);
+      removePair(ev.pr);
+    } else if (ev.type === 'rupture') {
+      rupture(ev.pr);
     }
   }
 
@@ -2014,18 +2094,17 @@ function stepLavaSim(dt, now) {
   if (now >= S.emitAt) {
     const excess = pool.area - P.poolFloor;
     if (excess > 0.006 && bodies.length < LAVA_MAX - 2) {
-      const area = P.emitFrac * excess;
-      const r = Math.sqrt(area) * size;
+      const targetArea = P.emitFrac * excess;
+      const rTarget = Math.sqrt(targetArea) * size;
       const h = lavaHash(now * 7.1 + S.nextId);
       const x = (0.15 + 0.7 * h) * aspect;
+      // starts tiny and submerged; 'emerge' below grows it to targetArea
+      // while it floats up, rather than popping into existence full-sized
       const b = newBody({
-        x, y: poolSurfaceAt(x) + r * 0.85, area, T: 1.0,
-        aspect: 1.3, axX: 0, axY: 1, noPairUntil: now + 0.5,
+        x, y: poolSurfaceAt(x) - rTarget, area: minArea, T: 1.0,
+        aspect: 1.3, axX: 0, axY: 1, noPairUntil: now + 0.3,
       });
-      if (b) {
-        pool.area -= area;
-        pairs.push({ a: pool, b, state: 'stretch', drain: 1, t: 0, k0: P.kMax * r, k: P.kMax * r, d0: 1.85 * r });
-      }
+      if (b) pairs.push({ a: pool, b, state: 'emerge', t: 0, targetArea, k0: 0, k: 0 });
     }
     S.emitAt = now + lerp(P.emitEvery[0], P.emitEvery[1], lavaHash(now * 3.3)) / Math.sqrt(Math.max(speed, 0.1));
   }
