@@ -1697,6 +1697,7 @@ function stepLavaSim(dt, now) {
   const bodies = S.bodies, pairs = S.pairs, pool = S.pool, c = S.cursor;
   const R      = (b) => Math.sqrt(b.area) * size;    // circle-equivalent radius
   const minArea = P.minRadius * P.minRadius;
+  pool.x = aspect / 2;                                // stay centred if the window's aspect changes
   const poolA  = aspect * P.poolWidth;
   // The pool's drawn (and contact) height follows its true area with a short
   // lag, so wax entering or leaving never steps the surface.
@@ -1878,7 +1879,10 @@ function stepLavaSim(dt, now) {
         // approaching velocity simply cancels — no bounce.
         const minD = (g.ra + g.rb) * 0.98;
         if (g.dist < minD) {
-          const ov = minD - g.dist;
+          // eased, not snapped: a pair that forms already overlapping (e.g. a
+          // freshly merged, larger body resting on the pool) would otherwise
+          // jump by the whole overlap — up to a cell — in one frame
+          const ov = (minD - g.dist) * (1 - Math.exp(-dt / 0.15));
           if (a.isPool)      { b.x += g.nx * ov;     b.y += g.ny * ov; }
           else if (b.isPool) { a.x -= g.nx * ov;     a.y -= g.ny * ov; }
           else { a.x -= g.nx * ov / 2; a.y -= g.ny * ov / 2; b.x += g.nx * ov / 2; b.y += g.ny * ov / 2; }
@@ -1895,9 +1899,13 @@ function stepLavaSim(dt, now) {
         const grown = Math.min(pr.t / tN, 1) ** 0.6;
         pr.k = P.kMax * rEff * grown;
         // capillary pull (Stokes: speed ∝ force / R)
+        // Applied as a displacement (a velocity × dt), not added to b.vx/b.vy:
+        // section 1 smooths vx/vy as persistent state, so an addition there
+        // accumulates to pull/kv (~7.7× at 60 fps, frame-rate dependent) and
+        // made necked blobs pass through each other / fall through the pool.
         const pull = P.pull * grown;
-        if (!a.isPool) { a.vx += g.nx * pull * rEff / g.ra; a.vy += g.ny * pull * rEff / g.ra; }
-        if (!b.isPool) { b.vx -= g.nx * pull * rEff / g.rb; b.vy -= g.ny * pull * rEff / g.rb; }
+        if (!a.isPool) { a.x += g.nx * pull * rEff / g.ra * dt; a.y += g.ny * pull * rEff / g.ra * dt; }
+        if (!b.isPool) { b.x -= g.nx * pull * rEff / g.rb * dt; b.y -= g.ny * pull * rEff / g.rb * dt; }
         if (g.dist > (g.ra + g.rb) * P.stretchBreak) {
           pr.state = 'stretch'; pr.t = 0; pr.k0 = pr.k; pr.d0 = g.dist;
         } else if (pr.t >= tN) {
@@ -1953,8 +1961,8 @@ function stepLavaSim(dt, now) {
         const tau = Math.min(pr.t / tP, 1);
         pr.k = pr.k0 * Math.sqrt(1 - tau);
         const pull = P.pull * 0.3 * (1 - tau);      // a thinning bridge still tugs a little
-        if (!a.isPool) { a.vx += g.nx * pull * rEff / g.ra; a.vy += g.ny * pull * rEff / g.ra; }
-        if (!b.isPool) { b.vx -= g.nx * pull * rEff / g.rb; b.vy -= g.ny * pull * rEff / g.rb; }
+        if (!a.isPool) { a.x += g.nx * pull * rEff / g.ra * dt; a.y += g.ny * pull * rEff / g.ra * dt; }
+        if (!b.isPool) { b.x -= g.nx * pull * rEff / g.rb * dt; b.y -= g.ny * pull * rEff / g.rb * dt; }
         if (tau >= 1) {
           rupture(pr);
           break outer;

@@ -8,7 +8,31 @@
       "Bash(grep -nE \"^function stepLavaSim|^function seedLavaSim|^const lavaPhysics|^canvas.addEventListener\\\\\\('pointermove', \\\\\\(e\\\\\\) => \\\\{$\" src/main.js)",
       "Bash(node /private/tmp/claude-501/-Users-neriuqe-ascii-three/b6c656be-fbff-4a4b-bcbd-db6d7b444798/scratchpad/flicker.mjs /private/tmp/claude-501/-Users-neriuqe-ascii-three/b6c656be-fbff-4a4b-bcbd-db6d7b444798/scratchpad/nocrt_0.png /private/tmp/claude-501/-Users-neriuqe-ascii-three/b6c656be-fbff-4a4b-bcbd-db6d7b444798/scratchpad/nocrt_0.png)",
       "Bash(node /private/tmp/claude-501/-Users-neriuqe-ascii-three/b6c656be-fbff-4a4b-bcbd-db6d7b444798/scratchpad/flicker.mjs /private/tmp/claude-501/-Users-neriuqe-ascii-three/b6c656be-fbff-4a4b-bcbd-db6d7b444798/scratchpad/nocrt_0.png /private/tmp/claude-501/-Users-neriuqe-ascii-three/b6c656be-fbff-4a4b-bcbd-db6d7b444798/scratchpad/nocrt_1.png)",
-      "Bash(node /private/tmp/claude-501/-Users-neriuqe-ascii-three/b6c656be-fbff-4a4b-bcbd-db6d7b444798/scratchpad/flicker.mjs /private/tmp/claude-501/-Users-neriuqe-ascii-three/b6c656be-fbff-4a4b-bcbd-db6d7b444798/scratchpad/nocrt_0.png /private/tmp/claude-501/-Users-neriuqe-ascii-three/b6c656be-fbff-4a4b-bcbd-db6d7b444798/scratchpad/nocrt_7.png)"
+      "Bash(node /private/tmp/claude-501/-Users-neriuqe-ascii-three/b6c656be-fbff-4a4b-bcbd-db6d7b444798/scratchpad/flicker.mjs /private/tmp/claude-501/-Users-neriuqe-ascii-three/b6c656be-fbff-4a4b-bcbd-db6d7b444798/scratchpad/nocrt_0.png /private/tmp/claude-501/-Users-neriuqe-ascii-three/b6c656be-fbff-4a4b-bcbd-db6d7b444798/scratchpad/nocrt_7.png)",
+      "Read(//Users/neriuqe/.claude/skills/**)",
+      "Read(//Users/neriuqe/.claude/**)",
+      "Bash(cd ~/.claude/skills/webgpu-threejs-tsl && find . -type f ! -name .DS_Store | sort | xargs wc -l; echo \"--- diff user vs project copy ---\"; diff -rq ~/.claude/skills/webgpu-threejs-tsl /Users/neriuqe/ascii-three/.claude/skills/webgpu-threejs-tsl -x .DS_Store && echo \"identical\")",
+      "Read(//Users/neriuqe/.claude/skills/webgpu-threejs-tsl/**)",
+      "Bash(node -e 'console.log\\(\"three\", require\\(\"./node_modules/three/package.json\"\\).version\\)')",
+      "Bash(sed -i '' 's#const names = m\\\\[1\\\\].split\\('\\\\'','\\\\''\\)#const names = m[1].replace\\(/\\\\\\\\/\\\\\\\\/[^\\\\\\\\n]*/g, '\\\\'''\\\\''\\).replace\\(/\\\\\\\\/\\\\\\\\*[\\\\\\\\s\\\\\\\\S]*?\\\\\\\\*\\\\\\\\//g, '\\\\'''\\\\''\\).split\\('\\\\'','\\\\''\\)#' /private/tmp/claude-501/-Users-neriuqe-ascii-three/b6c656be-fbff-4a4b-bcbd-db6d7b444798/scratchpad/skillcheck.mjs)",
+      "Bash(node /private/tmp/claude-501/-Users-neriuqe-ascii-three/b6c656be-fbff-4a4b-bcbd-db6d7b444798/scratchpad/skillcheck.mjs)",
+      "Bash(node -e ' *)",
+      "Bash(awk '{print}')",
+      "Bash(grep -v \"^\\\\s*[0-9]*\\\\s*\\\\*\\\\s*$\")",
+      "Bash(node --input-type=module -e ' *)",
+      "Read(//Users/neriuqe/ascii-three/display/**)",
+      "Bash(grep -v \"^\\\\-\\\\-$\")",
+      "Bash(grep -n \"^\\\\s*[a-zA-Z_]*\\(.*\\) {$\\\\|^export\\\\|getTextureNode\\\\|'depth'\\\\|'output'\" display/PassNode.js)",
+      "Bash(node -e \"import\\('three/webgpu'\\).then\\(m=>{console.log\\(Object.keys\\(m\\).length, typeof m.WGSLNodeBuilder\\)}\\).catch\\(e=>console.log\\('ERR',e.message\\)\\)\")",
+      "Bash(node -e \"import\\('three/tsl'\\).then\\(m=>{for \\(const k of ['instancedArray','attributeArray','storage','instanceIndex','globalId','localId','workgroupId','numWorkgroups','subgroupSize','invocationLocalIndex','invocationSubgroupIndex','subgroupIndex','vertexIndex','drawIndex','workgroupBarrier','storageBarrier','textureBarrier','atomicAdd','atomicSub','atomicMax','atomicMin','atomicAnd','atomicOr','atomicXor','atomicLoad','atomicStore','hash','deltaTime','time','select','mix','color','Loop','computeKernel','localIndex','workgroupArray','storageObject']\\) console.log\\(k, typeof m[k]\\)}\\)\")",
+      "Bash(grep -n \"^\\\\s*[a-zA-Z]*\\(.*\\) {$\\\\|^export\\\\|this\\\\.access\\\\|NodeAccess\\\\|isAtomic\\\\|setPBO\\\\|toReadOnly\\\\|toAtomic\" src/nodes/accessors/StorageBufferNode.js)",
+      "Bash(cd /Users/neriuqe/ascii-three/node_modules/three/src/nodes && sed -n 1,120p display/FrontFacingNode.js | grep -v \"^\\\\s*\\\\*\\\\|^\\\\s*/\\\\*\\\\*\"; ls ../../examples/ 2>/dev/null | head; ls /Users/neriuqe/ascii-three/node_modules/three/)",
+      "Read(//Users/**)",
+      "Bash(cd /Users/neriuqe/ascii-three/node_modules/three/src/nodes && sed -n 1,30p math/OperatorNode.js; grep -n \"'%'\\\\|mod\\\\b\\\\|fnOpSnippet\\\\|getFunctionOperator\" math/OperatorNode.js | head; grep -n \"mod\\\\b\\\\|tsl_mod\\\\|'%'\" ../renderers/webgpu/nodes/WGSLNodeBuilder.js | head)",
+      "Read(//Users/neriuqe/renderers/webgpu/nodes/**)",
+      "Bash(cd /Users/neriuqe/ascii-three/node_modules/three && grep -n \"deprecat\" src/core/Clock.js src/core/Timer.js 2>/dev/null; grep -rn \"class InstancedMesh\\\\|isInstancedMesh\" src/renderers/common/RenderObject.js | head -3; grep -n \"instanceIndex\\\\|positionNode\" src/materials/nodes/PointsNodeMaterial.js | head; grep -n \"hash = \\\\|export const hash\" -A8 src/nodes/core/../math/Hash.js 2>/dev/null | head -20)",
+      "Read(//Users/neriuqe/ascii-three/src/nodes/math/**)",
+      "Bash(cd /Users/neriuqe/ascii-three/node_modules/three/src/nodes && grep -n \"export function getValueFromType\" -A 40 core/NodeUtils.js | head -50; grep -n \"'color'\" ../renderers/webgpu/nodes/WGSLNodeBuilder.js core/NodeBuilder.js | head)"
     ]
   }
 }
