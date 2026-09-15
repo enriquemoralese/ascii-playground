@@ -553,9 +553,13 @@ const lavaPhysics = {
   plate:     0.15,  // height of the hot zone
   tauThermal: 20,   // s for an rRef body to approach ambient; scales with R²
   // coalescence
-  kDrain:    12,    // film drainage time = kDrain · R_eff^1.5  (1–4 s for medium bodies)
+  kDrain:    120,   // film drainage time = kDrain · R_eff^1.5  (1.8 s at R_eff 0.06, ~4 s at 0.1)
   tDrainRelax: 2.0, // a partly drained film heals over this long once contact breaks
-  tNeckK:    6.0,   // bridge growth time = tNeckK · R_eff  (~0.5 s)
+  tNeckK:    14,    // bridge growth time = tNeckK · R_eff  (0.85 s at R_eff 0.06)
+  tConv:     1.0,   // blob–blob 'converge': the two bodies become one over this long
+  tAbs:      1.2,   // pool 'absorb': a body's wax transfers into the pool over this long
+  tAbsFollow: 0.4,  // …while its centre follows the sinking target with this time constant
+  poolVisTau: 0.5,  // the pool's drawn/contact area lags the true area by this (no surface steps)
   kMax:      0.35,  // smooth-min radius of a full bridge, × R_eff
   pull:      0.05,  // capillary pull of a bridge (screen heights/s)
   stretchBreak: 1.6,// bridged pair separation (× (R_i + R_j)) beyond which the bridge thins
@@ -1615,18 +1619,26 @@ canvas.addEventListener('pointermove', (e) => {
 //             (longer for big bodies). They flatten against each other and
 //             can part again without merging.
 //   neck    — the film breaks; a bridge grows (the smooth-min k rises over
-//             ~0.5 s), the bodies are pulled together, then become one
-//             elongated body that relaxes back to round.
+//             ~0.85 s) and the bodies are pulled together.
+//   converge — (blob–blob) over ~1 s both bodies slide to their common
+//             centroid, grow to the combined area and elongate along the
+//             join, moving at a shared velocity; at the end they are two
+//             identical co-centred ellipses, so swapping in one body changes
+//             no pixel. It then relaxes back to round.
+//   absorb  — (blob–pool) over ~1.2 s the body's wax transfers into the pool
+//             while its centre sinks below the surface; it's removed once
+//             it's fully inside.
 //   stretch — a bridged pair keeps separating; the bridge thins and snaps
 //             (Rayleigh–Plateau), leaving a small satellite in between.
-// The base pool is a body anchored at the bottom: sinking wax merges into
-// it, and now and then it bulges and pinches off a fresh blob (leaving about
-// a third behind), so emission is pulsed like the real thing.
+// The base pool is a body anchored at the bottom whose surface is an
+// ellipse (poolSurfaceAt): sinking wax settles onto it and is absorbed, and
+// now and then it bulges and pinches off a fresh blob (leaving about a
+// third behind), so emission is pulsed like the real thing.
 // Coordinates: x in [0, aspect], y in [0, 1] (up).
 
 const lavaSim = {
   bodies: [],   // wax bodies (see newBody); the base pool is one of them
-  pairs: [],    // coalescence state per touching pair: { a, b, state, drain, t, k, k0 }
+  pairs: [],    // coalescence state per touching pair: { a, b, state, drain, t, k, k0, … }
   pool: null,
   nextId: 1,
   seeded: false,
@@ -1642,7 +1654,7 @@ function newBody(o) {
   if (lavaSim.bodies.length >= LAVA_MAX) return null;
   const b = {
     id: lavaSim.nextId++, x: 0, y: 0, vx: 0, vy: 0, impX: 0, impY: 0, T: 0.5, area: 0.0064,
-    aspect: 1, axX: 0, axY: 1, isPool: false, noPairUntil: 0, lastCut: -10,
+    aspect: 1, axX: 0, axY: 1, isPool: false, locked: false, noPairUntil: 0, lastCut: -10,
     inside: false, enterX: 0, enterY: 0, contact: 0, dwellPinched: false,
     ...o,
   };
@@ -1658,7 +1670,7 @@ function seedLavaSim(now) {
   S.bodies.length = 0;
   S.pairs.length = 0;
   S.nextId = 1;
-  S.pool = newBody({ x: aspect / 2, y: 0, area: 0.035, T: 1, isPool: true });
+  S.pool = newBody({ x: aspect / 2, y: 0, area: 0.035, areaVis: 0.035, T: 1, isPool: true });
   for (let i = 0; i < 10; i++) {
     const h1 = lavaHash(i + 1), h2 = lavaHash(i + 7.3), h3 = lavaHash(i + 13.7);
     const r = lerp(0.05, 0.11, h3);
@@ -1686,8 +1698,13 @@ function stepLavaSim(dt, now) {
   const R      = (b) => Math.sqrt(b.area) * size;    // circle-equivalent radius
   const minArea = P.minRadius * P.minRadius;
   const poolA  = aspect * P.poolWidth;
-  const poolB  = pool.area * size * size / poolA;    // pool semi-minor axis = its height above y = 0
-  const poolTop = poolB;
+  // The pool's drawn (and contact) height follows its true area with a short
+  // lag, so wax entering or leaving never steps the surface.
+  pool.areaVis += (pool.area - pool.areaVis) * (1 - Math.exp(-dt / P.poolVisTau));
+  const poolB  = pool.areaVis * size * size / poolA;  // pool semi-minor axis = its height at the centre
+  // The pool is drawn as an ellipse, so its surface is lower off-centre;
+  // the sim's contact uses the same curve.
+  const poolSurfaceAt = (x) => poolB * Math.sqrt(Math.max(1 - ((x - pool.x) / poolA) ** 2, 0));
   const clamp  = THREE.MathUtils.clamp;
 
   // ── Cursor ──
@@ -1714,7 +1731,7 @@ function stepLavaSim(dt, now) {
     if (b.isPool) { const g = geom(b, a); return { ...g, nx: -g.nx, ny: -g.ny, ra: g.rb, rb: g.ra }; }
     if (a.isPool) {
       const rb = R(b);
-      return { ra: rb, rb, dist: (b.y - poolTop) + rb, nx: 0, ny: 1 };
+      return { ra: rb, rb, dist: (b.y - poolSurfaceAt(b.x)) + rb, nx: 0, ny: 1 };
     }
     const dx = b.x - a.x, dy = b.y - a.y;
     const dist = Math.hypot(dx, dy) || 1e-4;
@@ -1735,7 +1752,7 @@ function stepLavaSim(dt, now) {
     if (satArea >= minArea && a.area - shareA >= minArea && b.area - shareB >= minArea) {
       const gap = Math.max(g.dist - g.ra - g.rb, 0);
       const sx = a.isPool ? b.x : a.x + g.nx * g.ra;    // a's surface point
-      const sy = a.isPool ? poolTop : a.y + g.ny * g.ra;
+      const sy = a.isPool ? poolSurfaceAt(b.x) : a.y + g.ny * g.ra;
       const sat = newBody({
         x: sx + g.nx * gap / 2, y: sy + g.ny * gap / 2, area: satArea,
         T: (a.T + b.T) / 2, aspect: 1.4, axX: g.nx, axY: g.ny, noPairUntil: now + 1.5,
@@ -1746,30 +1763,59 @@ function stepLavaSim(dt, now) {
     removePair(pr);
   };
 
-  // Bridge closed: two bodies become one (or the pool swallows one). The
-  // result is elongated along the join and relaxes back to round.
-  const merge = (pr) => {
-    const { a, b } = pr;
-    if (a.isPool || b.isPool) {
-      const body = a.isPool ? b : a;
-      pool.area += body.area;
-      removeBody(body);
-    } else {
-      const g = geom(a, b);
-      const A = a.area + b.area, wa = a.area / A, wb = b.area / A;
-      const rNew = Math.sqrt(A) * size;
-      const semiMajor = Math.max((g.dist + g.ra + g.rb) / 2, rNew);
-      removeBody(a); removeBody(b);
-      newBody({
-        x: a.x * wa + b.x * wb, y: a.y * wa + b.y * wb, area: A,
-        T: a.T * wa + b.T * wb, impX: a.impX * wa + b.impX * wb, impY: a.impY * wa + b.impY * wb,
-        aspect: Math.min((semiMajor / rNew) ** 2, 3.0), axX: g.nx, axY: g.ny, noPairUntil: now + 0.5,
-      });
-    }
+  // Drop every pair (except `keep`) that involves any of the given bodies.
+  const dropPairsOf = (keep, ...ws) => {
     for (let n = pairs.length - 1; n >= 0; n--) {
       const q = pairs[n];
-      if (q.a === a || q.b === a || q.a === b || q.b === b) pairs.splice(n, 1);
+      if (q !== keep && ws.some((w) => q.a === w || q.b === w)) pairs.splice(n, 1);
     }
+  };
+
+  // Bridge fully grown between two blobs: start the converge. Both bodies
+  // stay alive; their offsets from the area-weighted centroid, areas, aspects
+  // and axes are captured here and lerped in the pair loop. While converging
+  // they're locked (no other pairs, no shape relaxation, no cutting).
+  const beginConverge = (pr, g) => {
+    const { a, b } = pr;
+    const A = a.area + b.area;
+    const wa = a.area / A, wb = b.area / A;
+    const cx = a.x * wa + b.x * wb, cy = a.y * wa + b.y * wb;
+    const alignedAxis = (w) => (w.axX * g.nx + w.axY * g.ny < 0) ? [-w.axX, -w.axY] : [w.axX, w.axY];
+    Object.assign(pr, {
+      state: 'converge', t: 0, A, wa, wb,
+      offAx: a.x - cx, offAy: a.y - cy, offBx: b.x - cx, offBy: b.y - cy,
+      area0a: a.area, area0b: b.area, aspect0a: a.aspect, aspect0b: b.aspect,
+      ax0a: alignedAxis(a), ax0b: alignedAxis(b), nx: g.nx, ny: g.ny,
+      k0: P.kMax * rEffOf(g),
+    });
+    a.locked = b.locked = true;
+    a.noPairUntil = b.noPairUntil = now + P.tConv + 0.5;
+    dropPairsOf(pr, a, b);
+  };
+
+  // Converge finished: the two bodies are identical and co-centred, so the
+  // single body that replaces them (same centre, area, aspect, axis and
+  // velocity) draws exactly the same pixels.
+  const finishConverge = (pr) => {
+    const { a, b, wa, wb } = pr;
+    const cx = a.x * wa + b.x * wb, cy = a.y * wa + b.y * wb;
+    removeBody(a); removeBody(b);
+    dropPairsOf(null, a, b);
+    newBody({
+      x: cx, y: cy, vx: a.vx, vy: a.vy, area: pr.A,
+      T: a.T * wa + b.T * wb, impX: a.impX * wa + b.impX * wb, impY: a.impY * wa + b.impY * wb,
+      aspect: 1.6, axX: pr.nx, axY: pr.ny, noPairUntil: now + 0.5,
+    });
+  };
+
+  // Bridge fully grown against the pool: start the absorb. The body is
+  // locked; its wax transfers into the pool continuously in the pair loop.
+  const beginAbsorb = (pr) => {
+    const body = pr.a.isPool ? pr.b : pr.a;
+    Object.assign(pr, { state: 'absorb', t: 0, area0: body.area });
+    body.locked = true;
+    body.noPairUntil = Infinity;
+    dropPairsOf(pr, body);
   };
 
   // ── 1. Thermal lag + Stokes velocity ──
@@ -1854,9 +1900,52 @@ function stepLavaSim(dt, now) {
         if (!b.isPool) { b.vx -= g.nx * pull * rEff / g.rb; b.vy -= g.ny * pull * rEff / g.rb; }
         if (g.dist > (g.ra + g.rb) * P.stretchBreak) {
           pr.state = 'stretch'; pr.t = 0; pr.k0 = pr.k; pr.d0 = g.dist;
-        } else if (g.dist < (g.ra + g.rb) * 0.75 || (pr.t >= tN && g.dist < (g.ra + g.rb) * 0.95)) {
-          merge(pr);
+        } else if (pr.t >= tN) {
+          // bridge fully grown: hand over to the smooth join
+          if (a.isPool || b.isPool) beginAbsorb(pr);
+          else beginConverge(pr, g);
+        }
+      } else if (pr.state === 'converge') {
+        pr.t += dt;
+        const tau = Math.min(pr.t / P.tConv, 1);
+        const e = sstep(tau, 0, 1);
+        // shared velocity (area-weighted), so the pair drifts as one
+        const vx = a.vx * pr.wa + b.vx * pr.wb, vy = a.vy * pr.wa + b.vy * pr.wb;
+        a.vx = b.vx = vx; a.vy = b.vy = vy;
+        // weights fixed at entry + shared velocity ⇒ this centroid is exact
+        const cx = a.x * pr.wa + b.x * pr.wb, cy = a.y * pr.wa + b.y * pr.wb;
+        a.x = cx + pr.offAx * (1 - e); a.y = cy + pr.offAy * (1 - e);
+        b.x = cx + pr.offBx * (1 - e); b.y = cy + pr.offBy * (1 - e);
+        a.area = lerp(pr.area0a, pr.A, e); b.area = lerp(pr.area0b, pr.A, e);
+        a.aspect = lerp(pr.aspect0a, 1.6, e); b.aspect = lerp(pr.aspect0b, 1.6, e);
+        for (const [w, ax0] of [[a, pr.ax0a], [b, pr.ax0b]]) {
+          const x = lerp(ax0[0], pr.nx, e), y = lerp(ax0[1], pr.ny, e);
+          const n = Math.hypot(x, y) || 1;
+          w.axX = x / n; w.axY = y / n;
+        }
+        // hold the bridge, then fade it before the swap: smin of two
+        // identical SDFs is dilated by k/4, so k must be 0 at the swap
+        pr.k = pr.k0 * (1 - sstep(tau, 0.7, 1));
+        if (tau >= 1) {
+          finishConverge(pr);
           break outer;   // bodies changed; the rest waits a frame
+        }
+      } else if (pr.state === 'absorb') {
+        const body = a.isPool ? b : a;
+        pr.t += dt;
+        const tau = Math.min(pr.t / P.tAbs, 1);
+        const target = pr.area0 * (1 - sstep(tau, 0, 1));
+        const dA = Math.max(body.area - target, 0);
+        body.area -= dA; pool.area += dA;           // continuous transfer, no surface step
+        const rc = R(body);
+        body.vx = body.vy = 0;                      // the sink below is its only motion
+        body.y += (poolSurfaceAt(body.x) - rc - body.y) * (1 - Math.exp(-dt / P.tAbsFollow));
+        pr.k = P.kMax * rc;
+        if (body.area < minArea) {                  // fully inside the pool's SDF by now
+          pool.area += body.area;
+          removeBody(body);
+          removePair(pr);
+          break outer;
         }
       } else if (pr.state === 'stretch') {
         const tP = P.tPinch * Math.sqrt(rEff / P.rRef) * (pr.fast ? 0.35 : 1);
@@ -1881,19 +1970,24 @@ function stepLavaSim(dt, now) {
   }
 
   // ── 3. Integrate, walls ──
+  const inPoolPair = new Set();
+  for (const p of pairs) { if (p.a.isPool) inPoolPair.add(p.b); else if (p.b.isPool) inPoolPair.add(p.a); }
   for (const b of bodies) {
     if (b.isPool) continue;
     b.x += b.vx * dt;
     b.y += b.vy * dt;
     const r = R(b);
     b.x = clamp(b.x, r, aspect - r);
-    if (b.y > 1 - r * 0.9)       { b.y = 1 - r * 0.9;       if (b.vy > 0) b.vy = 0; }
-    if (b.y < poolTop - r * 0.2) { b.y = poolTop - r * 0.2; if (b.vy < 0) b.vy = 0; }
+    if (b.y > 1 - r * 0.9) { b.y = 1 - r * 0.9; if (b.vy > 0) b.vy = 0; }
+    // free bodies rest on the pool surface; ones paired with it may go under
+    const floor = poolSurfaceAt(b.x) - r * 0.2;
+    if (!inPoolPair.has(b) && b.y < floor) { b.y = floor; if (b.vy < 0) b.vy = 0; }
   }
 
   // ── 4. Shape: a little elongation along the motion, relaxing to round ──
+  // (converging / absorbing bodies are driven by their pair instead)
   for (const b of bodies) {
-    if (b.isPool) continue;
+    if (b.isPool || b.locked) continue;
     const sp = Math.hypot(b.vx, b.vy);
     const target = 1 + 0.3 * Math.min(sp / (P.vRise * Math.max(speed, 0.1)), 1.5);
     b.aspect += (target - b.aspect) * (1 - Math.exp(-dt / P.tauRelax));
@@ -1915,8 +2009,9 @@ function stepLavaSim(dt, now) {
       const area = P.emitFrac * excess;
       const r = Math.sqrt(area) * size;
       const h = lavaHash(now * 7.1 + S.nextId);
+      const x = (0.15 + 0.7 * h) * aspect;
       const b = newBody({
-        x: (0.15 + 0.7 * h) * aspect, y: poolTop + r * 0.85, area, T: 1.0,
+        x, y: poolSurfaceAt(x) + r * 0.85, area, T: 1.0,
         aspect: 1.3, axX: 0, axY: 1, noPairUntil: now + 0.5,
       });
       if (b) {
@@ -2002,7 +2097,7 @@ function stepLavaSim(dt, now) {
     const n0 = bodies.length;   // bodies added by a cut wait until next frame
     for (let i = 0; i < n0; i++) {
       const w = bodies[i];
-      if (w.isPool) continue;
+      if (w.isPool || w.locked) continue;   // mid-merge wax isn't cuttable
       const inside = touching(w);
       if (inside && !w.inside) { w.enterX = c.lx; w.enterY = c.ly; w.contact = 0; w.dwellPinched = false; }
       if (inside) {
