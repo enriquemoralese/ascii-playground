@@ -122,7 +122,7 @@ const noiseUniforms = {
   uKaleidoRotation:   { value: 0 },
   uFeature8Enabled:   { value: 0 },
   uLavaSpeed:         { value: 0.3 },
-  uLavaSize:          { value: 1.0 },
+  uLavaSize:          { value: 1.05 },
   uLavaGlow:          { value: 0.15 },
   uLavaBodyCount:     { value: 0 },
   uLavaBodies:        { value: lavaBodyArray },
@@ -501,7 +501,7 @@ const feature1State = { enabled: false };
 const feature3State = { enabled: false };
 const feature4State = { enabled: false };
 const feature6State = { enabled: false };
-const feature8State = { enabled: false, cp437: true, jet: true, bloom: true, interactive: false };
+const feature8State = { enabled: false, cp437: true, bloom: true, interactive: false };
 let lavaCrtWasOn = false;  // CRT state before the lava lamp switched it on
 const crtState      = { enabled: false };
 const rainbowParams = { enabled: false, speed: 0.05 };
@@ -707,9 +707,10 @@ function revertPresetRainbow() {
 // ═══════════════════════════════════════════════════════════
 
 const pane = new Pane({ title: 'Menu' });
+pane.expanded = false;
 
 // ── 🌵 Presets (top of menu) ───────────────────────────────
-const presetsFolder = pane.addFolder({ title: '🌵', expanded: true });
+const presetsFolder = pane.addFolder({ title: '🌵', expanded: false });
 const presetState = { one: false, rainbow: false };
 presetsFolder.addBinding(presetState, 'one', {
   label: '💻',
@@ -771,9 +772,14 @@ function updateMenuTogglePosition() {
 }
 
 function positionMenuToggle() {
-  const rect = paneEl.getBoundingClientRect();
-  menuToggleDockedLeft = rect.left - 20;
-  menuToggleBtn.style.top = `${rect.top + 4}px`;
+  // While hidden the pane is translated off to the side, so its rect isn't
+  // the docked position — skip the recompute and just keep tracking the
+  // right edge (see updateMenuTogglePosition).
+  if (!paneHidden) {
+    const rect = paneEl.getBoundingClientRect();
+    menuToggleDockedLeft = rect.left - 20;
+    menuToggleBtn.style.top = `${rect.top + 4}px`;
+  }
   updateMenuTogglePosition();
 }
 
@@ -785,9 +791,19 @@ menuToggleBtn.addEventListener('click', () => {
 
 requestAnimationFrame(positionMenuToggle);
 window.addEventListener('resize', positionMenuToggle);
+// The pane's own height (and occasionally width) changes as folders open,
+// close, or it collapses right after load — re-dock the toggle whenever
+// that happens instead of relying on catching it at exactly the right frame.
+new ResizeObserver(positionMenuToggle).observe(paneEl);
+// The panel animates its own transform into place over ~0.35s right after
+// mount (collapsing to the title bar); re-sync once that settles so the
+// toggle doesn't end up docked to its mid-transition position.
+paneEl.addEventListener('transitionend', (ev) => {
+  if (ev.propertyName === 'transform') positionMenuToggle();
+});
 
 // ── Folder: Shape ──────────────────────────────────────────
-const shapeFolder = pane.addFolder({ title: 'Shape', expanded: true });
+const shapeFolder = pane.addFolder({ title: 'Shape', expanded: false });
 
 shapeFolder.addBinding(noiseUniforms.uSpeed, 'value', {
   min: 0, max: 1, step: 0.01, label: 'Speed',
@@ -950,7 +966,7 @@ regionsFolder.addButton({ title: 'Clear regions' }).on('click', () => {
 
 // ── Feature 3 — Trace ──────────────────────────────────────
 const traceFolder = magicFolder.addFolder({
-  title: 'Trace ⭐',
+  title: 'Trace',
   expanded: false,
 });
 
@@ -1104,7 +1120,7 @@ KALEIDO_PRESETS.forEach((preset) => {
 
 // ── Folder: Lava Lamp ⭐ ────────────────────────────────────
 // Blobs = Color A (neon), liquid = Color B (dark), so F combos restyle it.
-const lavaFolder = pane.addFolder({
+const lavaFolder = magicFolder.addFolder({
   title: 'Lava Lamp ⭐',
   expanded: false,
 });
@@ -1126,16 +1142,6 @@ lavaFolder.addBinding(feature8State, 'enabled', {
 lavaFolder.addBinding(feature8State, 'cp437', {
   label: 'CP437 ASCII',
 }).on('change', syncLavaAscii);
-
-lavaFolder.addBinding(feature8State, 'jet', {
-  label: 'Jet palette (VGA)',
-}).on('change', (ev) => {
-  asciiUniforms.uLavaJet.value = ev.value ? 1 : 0;
-});
-
-lavaFolder.addBinding(feature8State, 'bloom', {
-  label: 'Bloom (CRT off)',
-});
 
 function syncLavaAscii() {
   asciiUniforms.uLavaAscii.value = feature8State.enabled && feature8State.cp437 ? 1 : 0;
@@ -1165,7 +1171,7 @@ lavaFolder.addBinding(lavaPhysics, 'stir', {
 
 // ── Folder: CRT ────────────────────────────────────────────
 // 4 sliders. bloom takes decimals, the rest are 0-4 integer.
-const crtFolder = pane.addFolder({ title: 'CRT', expanded: false });
+const crtFolder = magicFolder.addFolder({ title: 'CRT ⭐', expanded: false });
 
 crtFolder.addBinding(crtState, 'enabled', {
   label: 'CRT ⭐',
@@ -2066,7 +2072,7 @@ function stepLavaSim(dt, now) {
     b.y += b.vy * dt;
     const r = R(b);
     b.x = clamp(b.x, r, aspect - r);
-    if (b.y > 1 - r * 0.9) { b.y = 1 - r * 0.9; if (b.vy > 0) b.vy = 0; }
+    if (b.y > 1 - r) { b.y = 1 - r; if (b.vy > 0) b.vy = 0; }
     // free bodies rest on the pool surface; ones paired with it may go under
     const floor = poolSurfaceAt(b.x) - r * 0.2;
     if (!inPoolPair.has(b) && b.y < floor) { b.y = floor; if (b.vy < 0) b.vy = 0; }

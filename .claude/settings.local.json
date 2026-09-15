@@ -32,7 +32,26 @@
       "Read(//Users/neriuqe/renderers/webgpu/nodes/**)",
       "Bash(cd /Users/neriuqe/ascii-three/node_modules/three && grep -n \"deprecat\" src/core/Clock.js src/core/Timer.js 2>/dev/null; grep -rn \"class InstancedMesh\\\\|isInstancedMesh\" src/renderers/common/RenderObject.js | head -3; grep -n \"instanceIndex\\\\|positionNode\" src/materials/nodes/PointsNodeMaterial.js | head; grep -n \"hash = \\\\|export const hash\" -A8 src/nodes/core/../math/Hash.js 2>/dev/null | head -20)",
       "Read(//Users/neriuqe/ascii-three/src/nodes/math/**)",
-      "Bash(cd /Users/neriuqe/ascii-three/node_modules/three/src/nodes && grep -n \"export function getValueFromType\" -A 40 core/NodeUtils.js | head -50; grep -n \"'color'\" ../renderers/webgpu/nodes/WGSLNodeBuilder.js core/NodeBuilder.js | head)"
+      "Bash(cd /Users/neriuqe/ascii-three/node_modules/three/src/nodes && grep -n \"export function getValueFromType\" -A 40 core/NodeUtils.js | head -50; grep -n \"'color'\" ../renderers/webgpu/nodes/WGSLNodeBuilder.js core/NodeBuilder.js | head)",
+      "Bash(pkill -f \"vite --port 5187\")",
+      "Bash(pkill -f \"vite --port 5188\")",
+      "Bash(pkill -f \"vite --port 5189\")",
+      "Bash(lsof -nP -iTCP:5173 -sTCP:LISTEN)",
+      "Bash(curl -s http://localhost:5173/src/main.js)",
+      "Bash(node fastload.mjs http://localhost:5173/)",
+      "Bash(node menu.mjs http://localhost:5190/ collapsed_check.png)",
+      "Bash(pkill -f \"vite --port 5190\")",
+      "Bash(pkill -f \"vite --port 5191\")",
+      "Bash(node aligncheck.mjs http://localhost:5192/)",
+      "Bash(node aligncheck2.mjs http://localhost:5193/)",
+      "Bash(pkill -f \"vite --port 5194\")",
+      "Bash(node aligncheck2.mjs http://localhost:5195/)",
+      "Bash(node menu.mjs http://localhost:5195/ align_final.png)",
+      "Bash(pkill -f \"vite --port 5195\")",
+      "Bash(node timeline.mjs http://localhost:5196/ lavacheck 3 10 20)",
+      "Bash(node ui.mjs http://localhost:5196/ lava_ui_check.png)",
+      "Bash(curl -s http://localhost:5196/src/main.js)",
+      "Bash(pkill -f \"vite --port 5196\")"
     ]
   }
 }
