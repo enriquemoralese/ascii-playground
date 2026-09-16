@@ -59,6 +59,8 @@ uniform float uKaleidoRotation;
 // and streamed in as ellipses; the shader only evaluates a signed distance.
 #define LAVA_MAX 24
 #define LAVA_PAIRS 12
+#define LAVA_POOL_INDEX 0          // the base pool is always the first body (seedLavaSim)
+#define LAVA_THREAD_SCALE 0.6      // thread radius as a fraction of the bridge's k
 uniform float uFeature8Enabled;
 uniform float uLavaGlow;
 uniform int   uLavaBodyCount;
@@ -236,6 +238,49 @@ float smin(float a, float b, float k) {
   return mix(b, a, h) - k * h * (1.0 - h);
 }
 
+// A smin only joins two surfaces when k > 2·gap, so a bridge that has
+// stretched far (a drop leaving the pool, a satellite in the gap) draws
+// nothing. The thread is drawn separately as a capsule between the two
+// bodies, radius = the bridge's k: it thins exactly as the sim thins k.
+// Thick where it meets each blob, thin at the waist — a real neck is a
+// bowling pin, not a bar. Both radii scale with the bridge's k, so the whole
+// profile thins together as the sim thins k.
+float sdThread(vec2 p, vec2 a, vec2 b, float rEnd, float rWaist) {
+  vec2 pa = p - a, ba = b - a;
+  float h = clamp(dot(pa, ba) / max(dot(ba, ba), 1e-8), 0.0, 1.0);
+  float r = mix(rWaist, rEnd, 1.0 - sin(h * 3.14159265));
+  return length(pa - ba * h) - r;
+}
+
+// Where the thread attaches on body i, aimed at body j. The pool (always
+// body 0, see seedLavaSim) is a wide ellipse centred at the bottom of the
+// screen, so it attaches on its surface right below j — as geom() does in
+// main.js; any other body attaches on its own outline.
+vec2 lavaAnchor(int i, int j) {
+  vec4 b = uLavaBodies[i];
+  if (i != LAVA_POOL_INDEX) return b.xy;
+  float x = uLavaBodies[j].x;
+  float u = (x - b.x) / b.z;
+  return vec2(x, b.w * sqrt(max(1.0 - u * u, 0.0)));
+}
+
+// The end is pulled `rEnd` back inside the body, so the thread's round cap
+// stays buried and it leaves the outline at full width instead of poking out
+// as a knob.
+vec2 lavaThreadEnd(int i, int j, float rEnd) {
+  vec4 b = uLavaBodies[i];
+  if (i == LAVA_POOL_INDEX) return lavaAnchor(i, j) - vec2(0.0, rEnd);
+  vec2 dir = lavaAnchor(j, i) - b.xy;
+  float len = length(dir);
+  if (len < 1e-5) return b.xy;
+  dir /= len;
+  vec2 ax = uLavaAxis[i];
+  float u = dot(dir, ax) / b.z;
+  float v = dot(dir, vec2(-ax.y, ax.x)) / b.w;
+  float surface = inversesqrt(max(u * u + v * v, 1e-12));   // ray from the centre to its own outline
+  return b.xy + dir * max(surface - rEnd, 0.0);
+}
+
 float lavaSDF(vec2 uv) {
   float aspect = uResolution.x / uResolution.y;
   vec2 p = vec2(uv.x * aspect, uv.y);
@@ -260,6 +305,15 @@ float lavaSDF(vec2 uv) {
     int i = int(pr.x + 0.5);
     int j = int(pr.y + 0.5);
     d = min(d, smin(dArr[i], dArr[j], pr.z));
+    float rEnd   = pr.z * LAVA_THREAD_SCALE * 1.6;
+    float rWaist = pr.z * LAVA_THREAD_SCALE * 0.5;
+    vec2 ea = lavaThreadEnd(i, j, rEnd);
+    vec2 eb = lavaThreadEnd(j, i, rEnd);
+    // Once the two bodies overlap, the ends cross over and the thread would
+    // fold back on itself — there the smin fillet is the join, so skip it.
+    if (dot(eb - ea, lavaAnchor(j, i) - lavaAnchor(i, j)) > 0.0) {
+      d = min(d, sdThread(p, ea, eb, rEnd, rWaist));
+    }
   }
 
   // a little slow lumpiness so surfaces aren't geometric

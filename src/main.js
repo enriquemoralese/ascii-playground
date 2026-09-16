@@ -501,7 +501,7 @@ const feature1State = { enabled: false };
 const feature3State = { enabled: false };
 const feature4State = { enabled: false };
 const feature6State = { enabled: false };
-const feature8State = { enabled: false, cp437: true, bloom: true, interactive: false };
+const feature8State = { enabled: false, cp437: true, bloom: true, interactive: false, coldStart: false };
 let lavaCrtWasOn = false;  // CRT state before the lava lamp switched it on
 const crtState      = { enabled: false };
 const rainbowParams = { enabled: false, speed: 0.05 };
@@ -556,13 +556,14 @@ const lavaPhysics = {
   kDrain:    120,   // film drainage time = kDrain · R_eff^1.5  (1.8 s at R_eff 0.06, ~4 s at 0.1)
   tDrainRelax: 2.0, // a partly drained film heals over this long once contact breaks
   tNeckK:    14,    // bridge growth time = tNeckK · R_eff  (0.85 s at R_eff 0.06)
-  tConv:     1.0,   // blob–blob 'converge': the two bodies become one over this long
+  tConv:     2.2,   // blob–blob 'converge': the two become one over this long (× √(R_eff/rRef))
   tAbs:      1.2,   // pool 'absorb': a body's wax transfers into the pool over this long
   tAbsFollow: 0.4,  // …while its centre follows the sinking target with this time constant
   poolVisTau: 0.5,  // the pool's drawn/contact area lags the true area by this (no surface steps)
   kMax:      0.35,  // smooth-min radius of a full bridge, × R_eff
   pull:      0.05,  // capillary pull of a bridge (screen heights/s)
-  stretchBreak: 1.6,// bridged pair separation (× (R_i + R_j)) beyond which the bridge thins
+  stretchBreak: 1.3,// bridged pair separation (× (R_i + R_j)) beyond which the bridge thins
+  stretchMaxExtra: 1.0,  // …and how much further it may stretch before it must snap, whatever the clock says
   tPinch:    1.2,   // bridge thinning time at rRef (× √(R_eff / rRef))
   satFrac:   [0.02, 0.06],  // satellite area as a fraction of the pair
   tauRelax:  1.0,   // ellipse → circle relaxation
@@ -1169,6 +1170,16 @@ lavaFolder.addBinding(lavaPhysics, 'stir', {
   min: 0.2, max: 3.0, step: 0.1, label: 'Stir strength',
 });
 
+// Test state (see proposal in chat): a cold lamp emits sticky wax that
+// pinches off slowly and sometimes fails to snap clean on the first try.
+// Warmth climbs back to normal over ~90s; toggling this resets it to 0 so
+// you don't have to restart the lamp to see the effect.
+lavaFolder.addBinding(feature8State, 'coldStart', {
+  label: 'Cold start (test)',
+}).on('change', (ev) => {
+  lavaSim.warmth = ev.value ? 0 : 1;
+});
+
 // ── Folder: CRT ────────────────────────────────────────────
 // 4 sliders. bloom takes decimals, the rest are 0-4 integer.
 const crtFolder = magicFolder.addFolder({ title: 'CRT ⭐', expanded: false });
@@ -1650,6 +1661,10 @@ const lavaSim = {
   nextId: 1,
   seeded: false,
   emitAt: 0,
+  // "Cold start" test (see 'coldStart' checkbox): 0 → 1 over ~90s once the
+  // lamp is switched on. Newly emitted droplets snapshot this at birth and
+  // stay that "sticky" for their whole life — see newBody's `warmth` field.
+  warmth: 1,
   cursor: { x: 0, y: 0, vx: 0, vy: 0, lx: 0, ly: 0, active: false, held: false, lastT: 0 },
 };
 
@@ -1662,7 +1677,7 @@ function newBody(o) {
   const b = {
     id: lavaSim.nextId++, x: 0, y: 0, vx: 0, vy: 0, impX: 0, impY: 0, T: 0.5, area: 0.0064,
     aspect: 1, axX: 0, axY: 1, isPool: false, locked: false, noPairUntil: 0, lastCut: -10,
-    inside: false, enterX: 0, enterY: 0, contact: 0, dwellPinched: false,
+    inside: false, enterX: 0, enterY: 0, contact: 0, dwellPinched: false, warmth: 1,
     ...o,
   };
   lavaSim.bodies.push(b);
@@ -1677,6 +1692,7 @@ function seedLavaSim(now) {
   S.bodies.length = 0;
   S.pairs.length = 0;
   S.nextId = 1;
+  // must be body 0: the shader anchors threads to the pool by index (LAVA_POOL_INDEX)
   S.pool = newBody({ x: aspect / 2, y: 0, area: 0.035, areaVis: 0.035, T: 1, isPool: true });
   for (let i = 0; i < 10; i++) {
     const h1 = lavaHash(i + 1), h2 = lavaHash(i + 7.3), h3 = lavaHash(i + 13.7);
@@ -1688,6 +1704,7 @@ function seedLavaSim(now) {
     });
   }
   S.emitAt = now + 3;
+  S.warmth = feature8State.coldStart ? 0 : 1;
   S.seeded = true;
   S.cursor.lx = S.cursor.x;
   S.cursor.ly = S.cursor.y;
@@ -1697,6 +1714,11 @@ function stepLavaSim(dt, now) {
   const P      = lavaPhysics;
   const S      = lavaSim;
   if (!S.seeded) seedLavaSim(now);
+  // Cold start test: while on, warmth climbs 0 → 1 over ~90s; while off it's
+  // pinned to 1 so every warmth-gated formula below is a no-op.
+  S.warmth = feature8State.coldStart
+    ? S.warmth + (1 - S.warmth) * (1 - Math.exp(-dt / 90))
+    : 1;
   const speed  = noiseUniforms.uLavaSpeed.value;
   const size   = noiseUniforms.uLavaSize.value;
   const aspect = canvas.width / canvas.height;
@@ -1746,6 +1768,7 @@ function stepLavaSim(dt, now) {
     return { ra: R(a), rb: R(b), dist, nx: dx / dist, ny: dy / dist };
   };
   const findPair = (a, b) => pairs.find((p) => (p.a === a && p.b === b) || (p.a === b && p.b === a));
+  const warmthOf = (w) => w.warmth ?? 1;   // cold-start test: pool/pool-adjacent bodies default warm
   const rEffOf = (g) => 2 * g.ra * g.rb / (g.ra + g.rb);   // harmonic radius
   const removeBody = (b) => { const i = bodies.indexOf(b); if (i >= 0) bodies.splice(i, 1); };
   const removePair = (pr) => { const i = pairs.indexOf(pr); if (i >= 0) pairs.splice(i, 1); };
@@ -1770,7 +1793,8 @@ function stepLavaSim(dt, now) {
         const sy = a.isPool ? poolSurfaceAt(b.x) : a.y + g.ny * g.ra;
         const sat = newBody({
           x: sx + g.nx * gap / 2, y: sy + g.ny * gap / 2, area: satArea,
-          T: (a.T + b.T) / 2, aspect: 1.4, axX: g.nx, axY: g.ny, noPairUntil: now + 1.5,
+          T: (a.T + b.T) / 2, warmth: (warmthOf(a) + warmthOf(b)) / 2,
+          aspect: 1.4, axX: g.nx, axY: g.ny, noPairUntil: now + 1.5,
         });
         if (sat) { a.area -= shareA; b.area -= shareB; }
       }
@@ -1787,12 +1811,39 @@ function stepLavaSim(dt, now) {
     }
   };
 
+  // How far two converging bodies may grow toward the combined area without
+  // the drawn union exceeding it. Union of two circles is monotonic in the
+  // growth factor, so a short bisection nails it; at zero separation it
+  // lands on 1, which is what makes the final swap seamless.
+  const convergeGrowth = (pr, sep) => {
+    const target = Math.PI * pr.A * size * size;
+    const union = (f) => {
+      const r1 = Math.sqrt(lerp(pr.area0a, pr.A, f)) * size;
+      const r2 = Math.sqrt(lerp(pr.area0b, pr.A, f)) * size;
+      if (sep >= r1 + r2) return Math.PI * (r1 * r1 + r2 * r2);
+      if (sep <= Math.abs(r1 - r2)) return Math.PI * Math.max(r1, r2) ** 2;
+      const c1 = clamp((sep * sep + r1 * r1 - r2 * r2) / (2 * sep * r1), -1, 1);
+      const c2 = clamp((sep * sep + r2 * r2 - r1 * r1) / (2 * sep * r2), -1, 1);
+      const tri = Math.sqrt(Math.max((-sep + r1 + r2) * (sep + r1 - r2) * (sep - r1 + r2) * (sep + r1 + r2), 0));
+      const lens = r1 * r1 * Math.acos(c1) + r2 * r2 * Math.acos(c2) - tri / 2;
+      return Math.PI * (r1 * r1 + r2 * r2) - lens;
+    };
+    if (union(0) >= target) return 0;
+    let lo = 0, hi = 1;
+    for (let n = 0; n < 14; n++) {
+      const mid = (lo + hi) / 2;
+      if (union(mid) < target) lo = mid; else hi = mid;
+    }
+    return (lo + hi) / 2;
+  };
+
   // Bridge fully grown between two blobs: start the converge. Both bodies
   // stay alive; their offsets from the area-weighted centroid, areas, aspects
   // and axes are captured here and lerped in the pair loop. While converging
   // they're locked (no other pairs, no shape relaxation, no cutting).
   const beginConverge = (pr, g) => {
     const { a, b } = pr;
+    const wf = (warmthOf(a) + warmthOf(b)) / 2;
     const A = a.area + b.area;
     const wa = a.area / A, wb = b.area / A;
     const cx = a.x * wa + b.x * wb, cy = a.y * wa + b.y * wb;
@@ -1802,10 +1853,15 @@ function stepLavaSim(dt, now) {
       offAx: a.x - cx, offAy: a.y - cy, offBx: b.x - cx, offBy: b.y - cy,
       area0a: a.area, area0b: b.area, aspect0a: a.aspect, aspect0b: b.aspect,
       ax0a: alignedAxis(a), ax0b: alignedAxis(b), nx: g.nx, ny: g.ny,
-      k0: P.kMax * rEffOf(g),
+      // cold wax resists fusing too, not just breaking: weaker bridge and a
+      // slower join (the real lamp needs a coil at the base to break the
+      // surface tension of cooled wax before it can merge at all)
+      k0: P.kMax * rEffOf(g) * lerp(0.5, 1.0, wf),
+      // big blobs merge slower than small ones, like every other timing here
+      dur: P.tConv * Math.sqrt(rEffOf(g) / P.rRef) * lerp(1.8, 1.0, wf),
     });
     a.locked = b.locked = true;
-    a.noPairUntil = b.noPairUntil = now + P.tConv + 0.5;
+    a.noPairUntil = b.noPairUntil = now + pr.dur + 0.5;
     dropPairsOf(pr, a, b);
   };
 
@@ -1820,6 +1876,7 @@ function stepLavaSim(dt, now) {
     newBody({
       x: cx, y: cy, vx: a.vx, vy: a.vy, area: pr.A,
       T: a.T * wa + b.T * wb, impX: a.impX * wa + b.impX * wb, impY: a.impY * wa + b.impY * wb,
+      warmth: warmthOf(a) * wa + warmthOf(b) * wb,
       aspect: 1.6, axX: pr.nx, axY: pr.ny, noPairUntil: now + 0.5,
     });
   };
@@ -1828,7 +1885,11 @@ function stepLavaSim(dt, now) {
   // locked; its wax transfers into the pool continuously in the pair loop.
   const beginAbsorb = (pr) => {
     const body = pr.a.isPool ? pr.b : pr.a;
-    Object.assign(pr, { state: 'absorb', t: 0, area0: body.area });
+    const wf = (warmthOf(pr.a) + warmthOf(pr.b)) / 2;
+    Object.assign(pr, {
+      state: 'absorb', t: 0, area0: body.area,
+      dur: P.tAbs * lerp(3.5, 1.0, wf), kScale: lerp(0.5, 1.0, wf),
+    });
     body.locked = true;
     body.noPairUntil = Infinity;
     dropPairsOf(pr, body);
@@ -1926,7 +1987,7 @@ function stepLavaSim(dt, now) {
         if (!a.isPool) { a.x += g.nx * pull * rEff / g.ra * dt; a.y += g.ny * pull * rEff / g.ra * dt; }
         if (!b.isPool) { b.x -= g.nx * pull * rEff / g.rb * dt; b.y -= g.ny * pull * rEff / g.rb * dt; }
         if (g.dist > (g.ra + g.rb) * P.stretchBreak) {
-          pr.state = 'stretch'; pr.t = 0; pr.k0 = pr.k; pr.d0 = g.dist;
+          pr.state = 'stretch'; pr.t = 0; pr.tau = 0; pr.k0 = pr.k; pr.d0 = g.dist;
         } else if (pr.t >= tN) {
           // bridge fully grown: hand over to the smooth join
           if (a.isPool || b.isPool) beginAbsorb(pr);
@@ -1934,39 +1995,51 @@ function stepLavaSim(dt, now) {
         }
       } else if (pr.state === 'converge') {
         pr.t += dt;
-        const tau = Math.min(pr.t / P.tConv, 1);
+        const tau = Math.min(pr.t / pr.dur, 1);
         const e = sstep(tau, 0, 1);
-        // shared velocity (area-weighted), so the pair drifts as one
+        // The pair ends up moving as one, but easing into that beats
+        // snapping both velocities to the average on the first frame —
+        // that reads as the two blobs jerking into step.
+        const kvj = 1 - Math.exp(-dt / 0.25);
         const vx = a.vx * pr.wa + b.vx * pr.wb, vy = a.vy * pr.wa + b.vy * pr.wb;
-        a.vx = b.vx = vx; a.vy = b.vy = vy;
-        // weights fixed at entry + shared velocity ⇒ this centroid is exact
+        a.vx += (vx - a.vx) * kvj; b.vx += (vx - b.vx) * kvj;
+        a.vy += (vy - a.vy) * kvj; b.vy += (vy - b.vy) * kvj;
         const cx = a.x * pr.wa + b.x * pr.wb, cy = a.y * pr.wa + b.y * pr.wb;
         a.x = cx + pr.offAx * (1 - e); a.y = cy + pr.offAy * (1 - e);
         b.x = cx + pr.offBx * (1 - e); b.y = cy + pr.offBy * (1 - e);
-        a.area = lerp(pr.area0a, pr.A, e); b.area = lerp(pr.area0b, pr.A, e);
+        // Both bodies have to end at the combined area (so the swap into one
+        // body changes nothing), but lerping them there while they're still
+        // apart draws two nearly-full blobs side by side: the wax visibly
+        // swells ~9% mid-merge and deflates again. Instead solve how far
+        // along that growth may be so the *union* keeps the combined area —
+        // the silhouette then just narrows from peanut to ellipse.
+        const ea = convergeGrowth(pr, Math.hypot(a.x - b.x, a.y - b.y));
+        a.area = lerp(pr.area0a, pr.A, ea); b.area = lerp(pr.area0b, pr.A, ea);
         a.aspect = lerp(pr.aspect0a, 1.6, e); b.aspect = lerp(pr.aspect0b, 1.6, e);
         for (const [w, ax0] of [[a, pr.ax0a], [b, pr.ax0b]]) {
           const x = lerp(ax0[0], pr.nx, e), y = lerp(ax0[1], pr.ny, e);
           const n = Math.hypot(x, y) || 1;
           w.axX = x / n; w.axY = y / n;
         }
-        // hold the bridge, then fade it before the swap: smin of two
-        // identical SDFs is dilated by k/4, so k must be 0 at the swap
-        pr.k = pr.k0 * (1 - sstep(tau, 0.7, 1));
+        // Fade the bridge out over the back half: smin of two identical SDFs
+        // is dilated by k/4, so holding k any longer leaves the silhouette
+        // puffed while the bodies are already mostly on top of each other
+        // (and k must be 0 at the swap anyway).
+        pr.k = pr.k0 * (1 - sstep(tau, 0.5, 1));
         if (tau >= 1) {
           events.push({ type: 'converge', pr });
         }
       } else if (pr.state === 'absorb') {
         const body = a.isPool ? b : a;
         pr.t += dt;
-        const tau = Math.min(pr.t / P.tAbs, 1);
+        const tau = Math.min(pr.t / pr.dur, 1);
         const target = pr.area0 * (1 - sstep(tau, 0, 1));
         const dA = Math.max(body.area - target, 0);
         body.area -= dA; pool.area += dA;           // continuous transfer, no surface step
         const rc = R(body);
         body.vx = body.vy = 0;                      // the sink below is its only motion
         body.y += (poolSurfaceAt(body.x) - rc - body.y) * (1 - Math.exp(-dt / P.tAbsFollow));
-        pr.k = P.kMax * rc;
+        pr.k = P.kMax * rc * pr.kScale;
         if (body.area < minArea) {                  // fully inside the pool's SDF by now
           events.push({ type: 'absorbDone', pr });
         }
@@ -1983,12 +2056,25 @@ function stepLavaSim(dt, now) {
         if (dA > 0) { body.area = newArea; pool.area -= dA; }
         pr.k = P.kMax * R(body);
         if (g.dist > (g.ra + g.rb) * P.stretchBreak) {
-          pr.state = 'stretch'; pr.t = 0; pr.k0 = pr.k; pr.d0 = g.dist;
+          pr.state = 'stretch'; pr.t = 0; pr.tau = 0; pr.k0 = pr.k; pr.d0 = g.dist;
         }
       } else if (pr.state === 'stretch') {
-        const tP = P.tPinch * Math.sqrt(rEff / P.rRef) * (pr.fast ? 0.35 : 1);
+        // Cold-start test: a pair involving cold-born wax thins much slower
+        // (sticky, not runny) — no-op (wf = 1) once warmth has caught up or
+        // the checkbox is off.
+        const wf = (warmthOf(a) + warmthOf(b)) / 2;
+        const tP = P.tPinch * Math.sqrt(rEff / P.rRef) * (pr.fast ? 0.35 : 1) * lerp(3.5, 1.0, wf);
         pr.t += dt;
-        const tau = Math.min(pr.t / tP, 1);
+        // The pinch-off runs on whichever is further along: its own clock, or
+        // how far the pair has pulled apart. Rayleigh–Plateau breaks a neck
+        // by how much it stretched, not by how long it took — without this a
+        // fast-rising blob (or a long cold tPinch) drags the thread across
+        // half the screen before the clock runs out. Monotonic, so a pair
+        // drifting back together doesn't un-thin the bridge.
+        const sep = g.dist / (g.ra + g.rb);
+        const tauD = clamp((sep - P.stretchBreak) / P.stretchMaxExtra, 0, 1);
+        pr.tau = Math.min(Math.max(pr.tau ?? 0, pr.t / tP, tauD), 1);
+        const tau = pr.tau;
         pr.k = pr.k0 * (1 - sstep(tau, 0, 1));      // zero slope both ends: thins, doesn't snap
         const pull = P.pull * 0.3 * (1 - tau);      // a thinning bridge still tugs a little
         if (!a.isPool) { a.x += g.nx * pull * rEff / g.ra * dt; a.y += g.ny * pull * rEff / g.ra * dt; }
@@ -2006,7 +2092,8 @@ function stepLavaSim(dt, now) {
             const sy = a.isPool ? poolSurfaceAt(b.x) : a.y + g.ny * g.ra;
             const sat = newBody({
               x: sx + g.nx * gap / 2, y: sy + g.ny * gap / 2, area: minArea,
-              T: (a.T + b.T) / 2, aspect: 1.4, axX: g.nx, axY: g.ny, noPairUntil: Infinity,
+              T: (a.T + b.T) / 2, warmth: (warmthOf(a) + warmthOf(b)) / 2,
+              aspect: 1.4, axX: g.nx, axY: g.ny, noPairUntil: Infinity,
             });
             if (sat) {
               pr.sat = sat; pr.satTarget = satArea;
@@ -2026,14 +2113,34 @@ function stepLavaSim(dt, now) {
             a.area -= dA * pr.satShareA; b.area -= dA * pr.satShareB;
           }
           pr.satPairA.k = pr.satPairB.k = pr.k * 0.5;
+          // cold wax drags the bead along with the rising parent instead of
+          // leaving it hanging where it beaded — the "streaking" look
+          if (wf < 1) {
+            const towards = (a.vy + b.vy) / 2 - pr.sat.vy;
+            pr.sat.vy += towards * (1 - wf) * 0.6 * (1 - Math.exp(-dt / 0.3));
+          }
         }
         if (tau >= 1) {
-          events.push({ type: 'rupture', pr });
+          // Cold wax doesn't always snap clean — sometimes the thread
+          // regrows and the bead gets pulled back in. Only once per pair,
+          // so a pair that reverts is guaranteed to rupture next time.
+          const coldRevert = !pr.coldReverted && pr.sat
+            && lavaHash(now * 13.7 + a.id + b.id * 3.1) < (1 - wf) * 0.6;
+          if (coldRevert) {
+            pr.coldReverted = true;
+            a.area += pr.sat.area * pr.satShareA; b.area += pr.sat.area * pr.satShareB;
+            removeBody(pr.sat);
+            removePair(pr.satPairA); removePair(pr.satPairB);
+            pr.sat = pr.satPairA = pr.satPairB = null;
+            pr.state = 'neck'; pr.t = 0; pr.tau = 0;   // k is already 0 here, so this is a seamless handoff
+          } else {
+            events.push({ type: 'rupture', pr });
+          }
         } else if (g.dist < pr.d0 * 0.9) {
           // actually coming back together (not just still close — the two
           // halves of a cut, or a blob leaving the pool, start overlapping):
           // the bridge regrows from where it is
-          pr.state = 'neck';
+          pr.state = 'neck'; pr.tau = 0;
           // inverse of grown = smoothstep(t/tN): closed form for 3x²-2x³ = grown
           const grown = clamp(pr.k / (P.kMax * rEff), 0, 1);
           pr.t = (P.tNeckK * rEff) * (0.5 - Math.sin(Math.asin(clamp(1 - 2 * grown, -1, 1)) / 3));
@@ -2108,7 +2215,7 @@ function stepLavaSim(dt, now) {
       // while it floats up, rather than popping into existence full-sized
       const b = newBody({
         x, y: poolSurfaceAt(x) - rTarget, area: minArea, T: 1.0,
-        aspect: 1.3, axX: 0, axY: 1, noPairUntil: now + 0.3,
+        aspect: 1.3, axX: 0, axY: 1, noPairUntil: now + 0.3, warmth: S.warmth,
       });
       if (b) pairs.push({ a: pool, b, state: 'emerge', t: 0, targetArea, k0: 0, k: 0 });
     }
@@ -2136,7 +2243,7 @@ function stepLavaSim(dt, now) {
     if (childArea < minArea || w.area - childArea < minArea) return;
     const cd = (4 * r * Math.sin(theta / 2) ** 3) / (3 * (theta - Math.sin(theta)));
     const child = newBody({
-      x: w.x + nx * cd, y: w.y + ny * cd, area: childArea, T: w.T,
+      x: w.x + nx * cd, y: w.y + ny * cd, area: childArea, T: w.T, warmth: warmthOf(w),
       aspect: 1.2, axX: nx, axY: ny, noPairUntil: now + 0.5,
     });
     if (!child) return;
@@ -2164,7 +2271,7 @@ function stepLavaSim(dt, now) {
     if (n > 1e-4) { nx /= n; ny /= n; } else { nx = 0; ny = -1; }
     const rd = Math.sqrt(childArea) * size;
     const child = newBody({
-      x: c.x + nx * rd, y: c.y + ny * rd, area: childArea, T: w.T, noPairUntil: now + 1.0,
+      x: c.x + nx * rd, y: c.y + ny * rd, area: childArea, T: w.T, warmth: warmthOf(w), noPairUntil: now + 1.0,
     });
     if (!child) return;
     w.area -= childArea;

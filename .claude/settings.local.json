@@ -51,7 +51,31 @@
       "Bash(node timeline.mjs http://localhost:5196/ lavacheck 3 10 20)",
       "Bash(node ui.mjs http://localhost:5196/ lava_ui_check.png)",
       "Bash(curl -s http://localhost:5196/src/main.js)",
-      "Bash(pkill -f \"vite --port 5196\")"
+      "Bash(pkill -f \"vite --port 5196\")",
+      "Bash(node timeline.mjs http://localhost:5197/ normalcheck 3 15 30)",
+      "Bash(pkill -f \"vite --port 5197\")",
+      "Bash(pkill -f \"vite --port 5198\")",
+      "Bash(pkill -f \"vite --port 5199\")",
+      "Bash(grep -n \"isPool\\) {$\\\\|lavaBodyArray\\\\[i\\\\].set\\(b.x, 0\" src/main.js)",
+      "Bash(sed \"s/const b = click\\('Cold start \\(test\\)'\\);/const b = click\\('Cold start \\(test\\)'\\) + ', ' + click\\('CRT ⭐'\\);/\" coldtest.mjs)",
+      "Bash(node coldcrt.mjs http://localhost:5200/ thread 10 13 16 19 22 25 28 31 34 37 40)",
+      "Bash(node timeline.mjs http://localhost:5200/ capsnorm 5 20)",
+      "Bash(node stir4.mjs http://localhost:5200/ capcut_base.png capcut_cut.png capcut_a.png capcut_b.png)",
+      "Bash(pkill -f \"vite --port 5200\")",
+      "Bash(python3 -)",
+      "Bash(sed \"s#document.querySelector\\('.tp-dfwv'\\).style.display = 'none';#document.querySelector\\('.tp-dfwv'\\).style.display = 'none'; window.__setLavaSpeed \\\\&\\\\& window.__setLavaSpeed\\(2.0\\);#\" coldcrt.mjs)",
+      "Bash(node fastcap.mjs http://localhost:5201/ fast 8 11 14 17 20 23)",
+      "Bash(node timeline.mjs http://localhost:5201/ final 5 20)",
+      "Bash(node stir4.mjs http://localhost:5201/ fin_base.png fin_cut.png fin_a.png fin_b.png)",
+      "Bash(pkill -f \"vite --port 5201\")",
+      "Bash(node coldcrt.mjs http://localhost:5202/ warm3 20 35 50)",
+      "Bash(pkill -f \"vite --port 5202\")",
+      "Bash(node /private/tmp/claude-501/-Users-neriuqe-ascii-three/b6c656be-fbff-4a4b-bcbd-db6d7b444798/scratchpad/convarea.mjs)",
+      "Bash(node convarea.mjs)",
+      "Bash(node stir4.mjs http://localhost:5203/ cv_base.png cv_cut.png cv_a.png cv_b.png)",
+      "Bash(pkill -f \"vite --port 5203\")",
+      "Bash(node convvar.mjs)",
+      "Bash(pkill -f \"vite --port 5204\")"
     ]
   }
 }
